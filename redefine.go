@@ -224,8 +224,15 @@ func fixADRP(code []byte, offset uintptr) error {
 }
 
 func patchRodataCodePtrs(offset uintptr) error {
+	if lastmoduledatap.etext >= lastmoduledatap.noptrdata {
+		return nil
+	}
+
 	mapStart := (lastmoduledatap.etext + pageSize - 1) & pageMask
 	mapEnd := lastmoduledatap.noptrdata & pageMask
+	if mapStart >= mapEnd {
+		return nil
+	}
 
 	entries := make(map[uintptr]struct{}, len(lastmoduledatap.ftab))
 	for _, ft := range lastmoduledatap.ftab {
@@ -272,6 +279,8 @@ func patchRodataCodePtrs(offset uintptr) error {
 		unix.MunmapPtr(tmpPtr, size)
 		return fmt.Errorf("vm_remap rodata (%d bytes at %#x): %w", size, mapStart, err)
 	}
+
+	unix.MunmapPtr(tmpPtr, size)
 
 	return nil
 }
