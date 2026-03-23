@@ -135,7 +135,10 @@ func duplicateText() (offset uintptr, err error) {
 
 	offset = uintptr(destPtr) - text
 
-	fixADRP(dest, offset)
+	err = fixADRP(dest, offset)
+	if err != nil {
+		return 0, fmt.Errorf("fixADRP: %w", err)
+	}
 
 	// Find the duplicate marker in src, then translate that address to dest and set the value to 1.
 	*(*uint32)(unsafe.Pointer(uintptr(unsafe.Pointer(dupMarker())) + offset)) = 1
@@ -172,9 +175,14 @@ const (
 	adrAddressMask = uint32(3<<29 | 0x7ffff<<5)
 )
 
-func fixADRP(code []byte, offset uintptr) {
+func fixADRP(code []byte, offset uintptr) error {
 	destBase := uintptr(unsafe.Pointer(unsafe.SliceData(code)))
 	srcBase := destBase - offset
+
+	// ADRP always uses 4KB page granularity regardless of OS page size.
+	const adrpPageMask = ^uintptr(0xfff)
+	origTextPage := origText & adrpPageMask
+	origEtextPage := (origEtext + 0xfff) & adrpPageMask
 
 	for i := uintptr(0); i < uintptr(len(code)); i += 4 {
 		raw := code[i : i+4]
@@ -193,13 +201,17 @@ func fixADRP(code []byte, offset uintptr) {
 
 			// Don't update the address if the target is within the
 			// original text. We want those to keep the same relative value
-			// so that they'll point to the next text.
-			targetPage := uintptr(int64(srcPC&^uintptr(0xfff)) + oldArg)
-			if targetPage >= origText&^0xfff && targetPage < (origEtext+pageSize-1)&pageMask {
+			// so that they'll point to the new text.
+			targetPage := uintptr(int64(srcPC&adrpPageMask) + oldArg)
+			if targetPage >= origTextPage && targetPage < origEtextPage {
 				continue
 			}
 
-			newArg := uint32((int64(srcPC&^uintptr(0xfff)) + oldArg - int64(destPC&^uintptr(0xfff))) >> 12)
+			newImm := (int64(srcPC&adrpPageMask) + oldArg - int64(destPC&adrpPageMask)) >> 12
+			if newImm < -(1<<20) || newImm >= (1<<20) {
+				return fmt.Errorf("ADRP at byte offset %d: adjusted immediate %d out of 21-bit signed range", i, newImm)
+			}
+			newArg := uint32(newImm)
 
 			encoded := binary.LittleEndian.Uint32(raw) &^ adrAddressMask
 			encoded |= (newArg & 3) << 29             // Lowest 2 bits to bits 30 and 29
@@ -208,6 +220,7 @@ func fixADRP(code []byte, offset uintptr) {
 
 		}
 	}
+	return nil
 }
 
 func patchRodataCodePtrs(offset uintptr) error {
