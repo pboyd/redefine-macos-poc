@@ -162,6 +162,3 @@ func vmRemap(addr uintptr, srcAddr uintptr, size uintptr) (unsafe.Pointer, error
 
 	return unsafe.Pointer(uintptr(vmAddr)), nil
 }
-
-//go:linkname lastmoduledatap runtime.lastmoduledatap
-var lastmoduledatap *moduledata
